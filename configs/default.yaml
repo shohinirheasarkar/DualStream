@@ -1,0 +1,36 @@
+project:
+  name: neuromamba
+  seed: 42
+
+data:
+  num_neurons: 12
+  num_timepoints: 1000
+  train_fraction: 0.8
+  noise_std: 0.1
+
+model:
+  input_dim: 1
+  hidden_dim: 32
+  fast_kernel_size: 5
+  slow_kernel_size: 51
+  latent_dim: 16
+  dropout: 0.1
+
+connectivity:
+  lag_window: 10
+  allow_self_connections: false
+  sparsity: 0.1
+
+training:
+  batch_size: 8
+  epochs: 50
+  learning_rate: 0.001
+  weight_decay: 0.0001
+
+loss_weights:
+  reconstruction: 1.0
+  prediction: 0.5
+  fast_sparsity: 0.01
+  slow_smoothness: 0.1
+  decorrelation: 0.1
+  connectivity_sparsity: 0.01
