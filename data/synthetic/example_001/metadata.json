@@ -1,0 +1,14 @@
+{
+    "dataset_name": "synthetic_example_001",
+    "num_neurons": 12,
+    "num_timepoints": 2000,
+    "edge_probability": 0.15,
+    "base_firing_rate": 0.02,
+    "coupling_strength": 0.08,
+    "slow_amplitude": 0.4,
+    "bleaching_strength": 0.25,
+    "noise_std": 0.15,
+    "seed": 42,
+    "shape_convention": "(neurons, time)",
+    "graph_convention": "graph[target, source]"
+}
