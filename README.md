@@ -10,9 +10,8 @@ Standard calcium-to-connectivity pipelines often assume that most calcium trace 
 
 The primary input is a matrix of calcium traces:
 
-```text
-X ∈ R^(N × T)
 
+X ∈ R^(N × T)
 
 
 ## Data Pipeline
