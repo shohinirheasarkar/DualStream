@@ -114,3 +114,19 @@ The tests check:
 - `.npy` and `.csv` loading
 - full pipeline execution
 
+## Future Validation and Dataset Expansion
+
+The current prototype uses a custom synthetic data generator with a known directed ground-truth graph. This was chosen intentionally because most real calcium imaging datasets do not provide known neuron-to-neuron directed connectivity, which makes early-stage validation difficult.
+
+The synthetic benchmark allows controlled testing of whether the model can recover directed predictive connectivity under different conditions such as noise, slow modulation, bleaching drift, and variable firing rates.
+
+Future versions of the project will explore integrating more biologically realistic simulation frameworks and public neuroscience datasets, including:
+
+- NAOMi synthetic calcium imaging simulator
+- CaImAn-based preprocessing pipelines
+- Spikefinder benchmark datasets
+- CASCADE ground-truth spike inference datasets
+- Allen Brain Observatory calcium imaging datasets
+
+These future datasets would help evaluate whether the model generalizes beyond the controlled synthetic benchmark and whether the learned fast/slow latent structure corresponds to real neural and modulatory dynamics.
+
