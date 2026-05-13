@@ -1,640 +1,253 @@
 """
 dual_stream_model.py
 
-Prototype dual-timescale functional connectivity model for the
-DualStream / NeuroMamba project.
+DualStream prototype model.
 
-IMPORTANT:
-This is NOT a full Mamba implementation yet.
+This is a working prototype of the project idea:
 
-Instead, this file builds a clean, interpretable prototype architecture
-that mimics the idea of selective fast and slow temporal processing.
+Observed ΔF/F calcium traces
+    -> shared temporal encoder
+    -> fast latent stream
+    -> slow latent stream
+    -> reconstruction decoder
+    -> future prediction decoder
+    -> directed connectivity matrix from FAST latent stream
 
-The current version uses:
-    - Conv1D input projection
-    - Shared GRU encoder
-    - Fast GRU stream
-    - Slow GRU stream
-    - Fusion block
-    - Reconstruction decoder
-    - Future prediction decoder
-    - Attention-style connectivity head
+Important:
+This is not full Mamba yet. The fast and slow streams currently use GRUs as
+lightweight stand-ins for future selective state-space/Mamba blocks.
 
-Future work:
-    Replace GRUs with true selective state-space / Mamba modules.
+Input shape:
+    x = [batch, neurons, time]
 
-------------------------------------------------------------
-INPUT
-------------------------------------------------------------
+Main output:
+    C = [neurons, neurons]
 
-Observed ΔF/F traces
-
-Shape:
-    (batch, neurons, time)
-
-------------------------------------------------------------
-OUTPUTS
-------------------------------------------------------------
-
-1. Reconstruction
-    reconstructed observed calcium traces
-
-2. Future prediction
-    predicted future neural activity
-
-3. Connectivity matrix
-    directed functional connectivity estimate
-
-------------------------------------------------------------
-SCIENTIFIC IDEA
-------------------------------------------------------------
-
-Fast stream:
-    attempts to model fast predictive neuronal dynamics
-
-Slow stream:
-    attempts to model slower latent modulatory structure
-
-Connectivity:
-    inferred using attention-style query-key interactions
-    between present target states and past source states
+Direction convention:
+    C[target, source]
 """
+
+import math
+from typing import Dict
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-import numpy as np
-import matplotlib.pyplot as plt
-
-
-# ============================================================
-# 1. Input projection layer
-# ============================================================
-
-class InputProjection(nn.Module):
-    """
-    Initial temporal feature extraction layer.
-
-    Uses Conv1D across time to extract local temporal structure.
-
-    Input:
-        (batch, neurons, time)
-
-    Output:
-        (batch, hidden_dim, time)
-    """
-
-    def __init__(
-        self,
-        num_neurons: int,
-        hidden_dim: int,
-    ):
-        super().__init__()
-
-        self.proj = nn.Conv1d(
-            in_channels=num_neurons,
-            out_channels=hidden_dim,
-            kernel_size=3,
-            padding=1,
-        )
-
-    def forward(self, x):
-
-        print("\n[InputProjection]")
-        print(f"Input shape: {x.shape}")
-
-        x = self.proj(x)
-
-        print(f"Projected shape: {x.shape}")
-
-        return x
-
-
-# ============================================================
-# 2. Shared encoder
-# ============================================================
-
-class SharedEncoder(nn.Module):
-    """
-    Shared temporal encoder before stream separation.
-
-    Uses a GRU to learn generic temporal features.
-
-    Input:
-        (batch, hidden_dim, time)
-
-    Output:
-        (batch, time, hidden_dim)
-    """
-
-    def __init__(
-        self,
-        hidden_dim: int,
-        encoder_hidden: int = 64,
-    ):
-        super().__init__()
-
-        self.gru = nn.GRU(
-            input_size=hidden_dim,
-            hidden_size=encoder_hidden,
-            batch_first=True,
-        )
-
-    def forward(self, x):
-
-        print("\n[SharedEncoder]")
-        print(f"Input shape: {x.shape}")
-
-        # GRU expects:
-        # (batch, time, features)
-
-        x = x.permute(0, 2, 1)
-
-        x, _ = self.gru(x)
-
-        print(f"Encoded shape: {x.shape}")
-
-        return x
-
-
-# ============================================================
-# 3. Fast stream
-# ============================================================
-
-class FastStream(nn.Module):
-    """
-    Fast temporal stream.
-
-    Intended to capture:
-        fast spike-like transient dynamics
-    """
-
-    def __init__(
-        self,
-        input_dim: int,
-        hidden_dim: int = 32,
-    ):
-        super().__init__()
-
-        self.gru = nn.GRU(
-            input_size=input_dim,
-            hidden_size=hidden_dim,
-            batch_first=True,
-        )
-
-    def forward(self, x):
-
-        print("\n[FastStream]")
-
-        out, _ = self.gru(x)
-
-        print(f"Fast latent shape: {out.shape}")
-
-        return out
-
-
-# ============================================================
-# 4. Slow stream
-# ============================================================
-
-class SlowStream(nn.Module):
-    """
-    Slow temporal stream.
-
-    Intended to capture:
-        slow modulatory latent structure
-    """
-
-    def __init__(
-        self,
-        input_dim: int,
-        hidden_dim: int = 64,
-    ):
-        super().__init__()
-
-        self.gru = nn.GRU(
-            input_size=input_dim,
-            hidden_size=hidden_dim,
-            batch_first=True,
-        )
-
-    def forward(self, x):
-
-        print("\n[SlowStream]")
-
-        out, _ = self.gru(x)
-
-        print(f"Slow latent shape: {out.shape}")
-
-        return out
-
-
-# ============================================================
-# 5. Fusion block
-# ============================================================
-
-class FusionBlock(nn.Module):
-    """
-    Combine fast and slow latent streams.
-    """
-
-    def __init__(
-        self,
-        fast_dim: int,
-        slow_dim: int,
-        fused_dim: int = 64,
-    ):
-        super().__init__()
-
-        self.linear = nn.Linear(
-            fast_dim + slow_dim,
-            fused_dim,
-        )
-
-    def forward(self, fast, slow):
-
-        print("\n[FusionBlock]")
-
-        fused = torch.cat([fast, slow], dim=-1)
-
-        print(f"Concatenated shape: {fused.shape}")
-
-        fused = self.linear(fused)
-
-        print(f"Fused latent shape: {fused.shape}")
-
-        return fused
-
-
-# ============================================================
-# 6. Reconstruction decoder
-# ============================================================
-
-class ReconstructionDecoder(nn.Module):
-    """
-    Reconstruct observed calcium traces.
-    """
-
-    def __init__(
-        self,
-        input_dim: int,
-        num_neurons: int,
-    ):
-        super().__init__()
-
-        self.linear = nn.Linear(
-            input_dim,
-            num_neurons,
-        )
-
-    def forward(self, x):
-
-        print("\n[ReconstructionDecoder]")
-
-        recon = self.linear(x)
-
-        print(f"Reconstruction shape: {recon.shape}")
-
-        return recon
-
-
-# ============================================================
-# 7. Future prediction decoder
-# ============================================================
-
-class FuturePredictionDecoder(nn.Module):
-    """
-    Predict future neural activity.
-
-    For now:
-        predicts one-step future activity.
-    """
-
-    def __init__(
-        self,
-        input_dim: int,
-        num_neurons: int,
-    ):
-        super().__init__()
-
-        self.linear = nn.Linear(
-            input_dim,
-            num_neurons,
-        )
-
-    def forward(self, x):
-
-        print("\n[FuturePredictionDecoder]")
-
-        pred = self.linear(x)
-
-        print(f"Future prediction shape: {pred.shape}")
-
-        return pred
-
-
-# ============================================================
-# 8. Connectivity head
-# ============================================================
-
-class ConnectivityHead(nn.Module):
-    """
-    Attention-style directed connectivity inference.
-
-    Core idea:
-        target neuron present
-        attends to
-        source neuron past
-
-    This is a simplified prototype version.
-    """
-
-    def __init__(
-        self,
-        latent_dim: int,
-        connectivity_dim: int = 32,
-    ):
-        super().__init__()
-
-        self.query_proj = nn.Linear(
-            latent_dim,
-            connectivity_dim,
-        )
-
-        self.key_proj = nn.Linear(
-            latent_dim,
-            connectivity_dim,
-        )
-
-    def forward(self, x):
-
-        """
-        Input:
-            (batch, time, latent_dim)
-
-        Output:
-            (batch, time, time)
-
-        NOTE:
-            For now this is temporal attention.
-            Later we will upgrade this into
-            neuron-wise directed connectivity.
-        """
-
-        print("\n[ConnectivityHead]")
-
-        q = self.query_proj(x)
-        k = self.key_proj(x)
-
-        print(f"Query shape: {q.shape}")
-        print(f"Key shape: {k.shape}")
-
-        scores = torch.matmul(
-            q,
-            k.transpose(-2, -1),
-        )
-
-        scores = scores / np.sqrt(q.shape[-1])
-
-        connectivity = F.softmax(scores, dim=-1)
-
-        print(f"Connectivity shape: {connectivity.shape}")
-
-        return connectivity
-
-
-# ============================================================
-# 9. Full DualStream model
-# ============================================================
 
 class DualStreamModel(nn.Module):
     """
-    Full prototype architecture.
+    End-to-end DualStream prototype.
+
+    The important design choice:
+        Each neuron is processed as its own time series, but the model weights
+        are shared across neurons.
+
+    This preserves neuron identity, which lets us compute a directed
+    neuron-to-neuron matrix from the fast latent stream.
     """
 
     def __init__(
         self,
-        num_neurons: int = 12,
-        input_hidden_dim: int = 32,
-        encoder_hidden_dim: int = 64,
-        fast_hidden_dim: int = 32,
-        slow_hidden_dim: int = 64,
-        fused_dim: int = 64,
+        hidden_dim: int = 32,
+        fast_dim: int = 32,
+        slow_dim: int = 32,
+        fused_dim: int = 32,
+        connectivity_dim: int = 16,
     ):
         super().__init__()
 
-        # ----------------------------------------------------
-        # Input projection
-        # ----------------------------------------------------
+        # Each neuron trace is scalar at each time point, so input_dim = 1.
+        self.input_projection = nn.Linear(1, hidden_dim)
 
-        self.input_proj = InputProjection(
-            num_neurons=num_neurons,
-            hidden_dim=input_hidden_dim,
+        # Shared temporal encoder.
+        self.shared_encoder = nn.GRU(
+            input_size=hidden_dim,
+            hidden_size=hidden_dim,
+            batch_first=True,
         )
 
-        # ----------------------------------------------------
-        # Shared encoder
-        # ----------------------------------------------------
-
-        self.shared_encoder = SharedEncoder(
-            hidden_dim=input_hidden_dim,
-            encoder_hidden=encoder_hidden_dim,
+        # Fast stream: meant to capture spike-like transient dynamics.
+        self.fast_stream = nn.GRU(
+            input_size=hidden_dim,
+            hidden_size=fast_dim,
+            batch_first=True,
         )
 
-        # ----------------------------------------------------
-        # Fast + slow streams
-        # ----------------------------------------------------
-
-        self.fast_stream = FastStream(
-            input_dim=encoder_hidden_dim,
-            hidden_dim=fast_hidden_dim,
+        # Slow stream: meant to capture slow modulatory dynamics.
+        self.slow_stream = nn.GRU(
+            input_size=hidden_dim,
+            hidden_size=slow_dim,
+            batch_first=True,
         )
 
-        self.slow_stream = SlowStream(
-            input_dim=encoder_hidden_dim,
-            hidden_dim=slow_hidden_dim,
-        )
+        # Combine fast and slow streams.
+        self.fusion = nn.Linear(fast_dim + slow_dim, fused_dim)
 
-        # ----------------------------------------------------
+        # Decode fused latent back to calcium trace.
+        self.reconstruction_decoder = nn.Linear(fused_dim, 1)
+
+        # Predict next-time activity.
+        self.future_decoder = nn.Linear(fused_dim, 1)
+
+        # Query-key projections for connectivity from fast stream.
+        self.query_projection = nn.Linear(fast_dim, connectivity_dim)
+        self.key_projection = nn.Linear(fast_dim, connectivity_dim)
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        min_lag: int = 1,
+        max_lag: int = 5,
+    ) -> Dict[str, torch.Tensor]:
+        """
+        x:
+            [batch, neurons, time]
+
+        returns dictionary with:
+            reconstruction:    [batch, neurons, time]
+            future_prediction: [batch, neurons, time]
+            fast_latent:       [batch, neurons, time, fast_dim]
+            slow_latent:       [batch, neurons, time, slow_dim]
+            fused_latent:      [batch, neurons, time, fused_dim]
+            connectivity:      [neurons, neurons]
+        """
+
+        batch_size, num_neurons, timepoints = x.shape
+
+        # ------------------------------------------------------------
+        # Treat each neuron as an independent sequence while sharing weights.
+        # [B, N, T] -> [B*N, T, 1]
+        # ------------------------------------------------------------
+        x_flat = x.reshape(batch_size * num_neurons, timepoints, 1)
+
+        # ------------------------------------------------------------
+        # Input projection + shared encoder
+        # ------------------------------------------------------------
+        h = self.input_projection(x_flat)
+        shared, _ = self.shared_encoder(h)
+
+        # ------------------------------------------------------------
+        # Fast and slow streams
+        # ------------------------------------------------------------
+        fast, _ = self.fast_stream(shared)
+        slow, _ = self.slow_stream(shared)
+
+        # ------------------------------------------------------------
         # Fusion
-        # ----------------------------------------------------
+        # ------------------------------------------------------------
+        fused = torch.cat([fast, slow], dim=-1)
+        fused = torch.tanh(self.fusion(fused))
 
-        self.fusion = FusionBlock(
-            fast_dim=fast_hidden_dim,
-            slow_dim=slow_hidden_dim,
-            fused_dim=fused_dim,
-        )
-
-        # ----------------------------------------------------
+        # ------------------------------------------------------------
         # Decoders
-        # ----------------------------------------------------
+        # ------------------------------------------------------------
+        reconstruction = self.reconstruction_decoder(fused).squeeze(-1)
+        future_prediction = self.future_decoder(fused).squeeze(-1)
 
-        self.reconstruction_decoder = ReconstructionDecoder(
-            input_dim=fused_dim,
-            num_neurons=num_neurons,
+        # Restore neuron identity.
+        reconstruction = reconstruction.reshape(batch_size, num_neurons, timepoints)
+        future_prediction = future_prediction.reshape(batch_size, num_neurons, timepoints)
+
+        fast_latent = fast.reshape(batch_size, num_neurons, timepoints, -1)
+        slow_latent = slow.reshape(batch_size, num_neurons, timepoints, -1)
+        fused_latent = fused.reshape(batch_size, num_neurons, timepoints, -1)
+
+        # ------------------------------------------------------------
+        # Connectivity from fast latent stream
+        # ------------------------------------------------------------
+        connectivity = self.compute_connectivity_from_fast_latent(
+            fast_latent=fast_latent,
+            min_lag=min_lag,
+            max_lag=max_lag,
         )
-
-        self.future_decoder = FuturePredictionDecoder(
-            input_dim=fused_dim,
-            num_neurons=num_neurons,
-        )
-
-        # ----------------------------------------------------
-        # Connectivity head
-        # ----------------------------------------------------
-
-        self.connectivity_head = ConnectivityHead(
-            latent_dim=fused_dim,
-        )
-
-    def forward(self, x):
-
-        """
-        Input:
-            x shape = (batch, neurons, time)
-
-        Returns:
-            reconstruction
-            future_prediction
-            connectivity
-            fast_latent
-            slow_latent
-        """
-
-        print("\n" + "=" * 70)
-        print("Running DualStreamModel forward pass")
-        print("=" * 70)
-
-        # ----------------------------------------------------
-        # Input projection
-        # ----------------------------------------------------
-
-        x_proj = self.input_proj(x)
-
-        # ----------------------------------------------------
-        # Shared encoding
-        # ----------------------------------------------------
-
-        shared = self.shared_encoder(x_proj)
-
-        # ----------------------------------------------------
-        # Fast + slow streams
-        # ----------------------------------------------------
-
-        fast = self.fast_stream(shared)
-        slow = self.slow_stream(shared)
-
-        # ----------------------------------------------------
-        # Fusion
-        # ----------------------------------------------------
-
-        fused = self.fusion(fast, slow)
-
-        # ----------------------------------------------------
-        # Reconstruction
-        # ----------------------------------------------------
-
-        reconstruction = self.reconstruction_decoder(fused)
-
-        # ----------------------------------------------------
-        # Future prediction
-        # ----------------------------------------------------
-
-        future_prediction = self.future_decoder(fused)
-
-        # ----------------------------------------------------
-        # Connectivity
-        # ----------------------------------------------------
-
-        connectivity = self.connectivity_head(fused)
 
         return {
             "reconstruction": reconstruction,
             "future_prediction": future_prediction,
+            "fast_latent": fast_latent,
+            "slow_latent": slow_latent,
+            "fused_latent": fused_latent,
             "connectivity": connectivity,
-            "fast_latent": fast,
-            "slow_latent": slow,
-            "fused_latent": fused,
         }
 
+    def compute_connectivity_from_fast_latent(
+        self,
+        fast_latent: torch.Tensor,
+        min_lag: int = 1,
+        max_lag: int = 5,
+    ) -> torch.Tensor:
+        """
+        Compute directed neuron-to-neuron connectivity from the fast stream.
 
-# ============================================================
-# 10. Visualization helper
-# ============================================================
+        fast_latent:
+            [batch, neurons, time, fast_dim]
 
-def visualize_latents(
-    fast_latent,
-    slow_latent,
-    save_path=None,
-):
-    """
-    Plot example latent channels.
-    """
+        For each target neuron i and source neuron j:
+            compare target_i at time t
+            to source_j at time t-lag
 
-    fast = fast_latent[0].detach().cpu().numpy()
-    slow = slow_latent[0].detach().cpu().numpy()
+        Output:
+            C[target, source]
+        """
 
-    plt.figure(figsize=(12, 5))
+        batch_size, num_neurons, timepoints, _ = fast_latent.shape
 
-    plt.subplot(1, 2, 1)
+        C = torch.zeros(
+            num_neurons,
+            num_neurons,
+            device=fast_latent.device,
+        )
 
-    for i in range(min(5, fast.shape[-1])):
-        plt.plot(fast[:, i])
+        lag_count = 0
 
-    plt.title("Fast latent channels")
+        for lag in range(min_lag, max_lag + 1):
+            source_past = fast_latent[:, :, :-lag, :]
+            target_now = fast_latent[:, :, lag:, :]
 
-    plt.subplot(1, 2, 2)
+            # Query = target present.
+            Q = self.query_projection(target_now)
 
-    for i in range(min(5, slow.shape[-1])):
-        plt.plot(slow[:, i])
+            # Key = source past.
+            K = self.key_projection(source_past)
 
-    plt.title("Slow latent channels")
+            # scores[b, target, source, time]
+            scores = torch.einsum("bitd,bjtd->bijt", Q, K)
+            scores = scores / math.sqrt(Q.shape[-1])
 
-    plt.tight_layout()
+            # Average across batch and time.
+            C = C + scores.mean(dim=(0, 3))
+            lag_count += 1
 
-    if save_path is not None:
-        plt.savefig(save_path, dpi=300)
+        C = C / lag_count
 
-    plt.show()
+        # Remove self-connections before normalization.
+        C = C.clone()
+        C.fill_diagonal_(float("-inf"))
 
+        # Row-wise softmax:
+        # for each target neuron, distribute incoming source weights.
+        C = F.softmax(C, dim=1)
 
-# ============================================================
-# 11. Standalone demo
-# ============================================================
+        # Force diagonal back to zero after softmax.
+        C = C.clone()
+        C.fill_diagonal_(0.0)
+
+        # Row-normalize so incoming weights sum to 1.
+        C = C / (C.sum(dim=1, keepdim=True) + 1e-8)
+
+        return C
+
 
 if __name__ == "__main__":
+    print("Testing DualStreamModel...")
 
-    print("\nCreating fake calcium batch...")
+    x = torch.randn(4, 12, 200)
 
-    batch_size = 2
-    num_neurons = 12
-    timepoints = 200
-
-    x = torch.randn(
-        batch_size,
-        num_neurons,
-        timepoints,
-    )
-
-    print(f"Fake input shape: {x.shape}")
-
-    model = DualStreamModel(
-        num_neurons=num_neurons,
-    )
-
+    model = DualStreamModel()
     outputs = model(x)
 
-    print("\n" + "=" * 70)
-    print("FINAL OUTPUT SHAPES")
-    print("=" * 70)
-
     for key, value in outputs.items():
-        print(f"{key}: {value.shape}")
+        print(key, value.shape)
 
-    visualize_latents(
-        outputs["fast_latent"],
-        outputs["slow_latent"],
-    )
-
-    print("\nDone.")
+    print("Model test complete.")
