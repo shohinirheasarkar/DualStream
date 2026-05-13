@@ -11,7 +11,7 @@ Standard calcium-to-connectivity pipelines often assume that most calcium trace 
 
 At this stage, the repo has a working end-to-end prototype of the main idea: take observed calcium traces, separate them into fast and slow latent dynamics, and use the fast latent stream to estimate a directed connectivity matrix.
 
-The current version does **not** use full Mamba yet. Instead, it uses lightweight GRU-based temporal modules as a prototype version of the fast and slow sequence models. This lets the full idea run end-to-end while keeping the code understandable and easy to debug. The long-term plan is to replace these GRU modules with true selective state-space / Mamba blocks.
+The current version doesn't use full Mamba yet. Instead, it uses lightweight GRU-based temporal modules as a prototype version of the fast and slow sequence models. The long-term plan is to replace these GRU modules with true selective state-space / Mamba blocks.
 
 ---
 
